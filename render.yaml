@@ -28,7 +28,6 @@ services:
         fromService:
           type: keyvalue
           name: advisor-ratelimit
-    region: singapore
           property: connectionString
 
   - type: keyvalue
