@@ -22,7 +22,8 @@ def _database_url(default):
 
 class Config:
     SECRET_KEY = _env("SECRET_KEY", "dev-secret-change-me")
-    JWT_SECRET_KEY = _env("JWT_SECRET_KEY", "dev-jwt-secret-change-me")
+    # HS256 keys should be at least 32 bytes; PyJWT warns about shorter ones.
+    JWT_SECRET_KEY = _env("JWT_SECRET_KEY", "dev-jwt-secret-change-me-0123456789abcdef")
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(hours=1)
     SQLALCHEMY_DATABASE_URI = _database_url("sqlite:///dev.db")
     SQLALCHEMY_TRACK_MODIFICATIONS = False
@@ -38,6 +39,18 @@ class Config:
     # Older messages are dropped so long conversations stay within the model's context.
     CHAT_HISTORY_LIMIT = 20
 
+    # Rate limits (Flask-Limiter syntax). Chat is limited per user, auth endpoints per IP address.
+    CHAT_RATE_LIMIT = _env("CHAT_RATE_LIMIT", "10 per minute;200 per day")
+    AUTH_RATE_LIMIT = _env("AUTH_RATE_LIMIT", "10 per minute")
+    # memory:// is per-process; use redis://... when running several workers or instances.
+    RATELIMIT_STORAGE_URI = _env("RATELIMIT_STORAGE_URI", "memory://")
+    RATELIMIT_HEADERS_ENABLED = True
+    # Number of reverse proxies in front of the app (0 when clients connect directly).
+    TRUSTED_PROXY_COUNT = int(_env("TRUSTED_PROXY_COUNT", "0"))
+
+    QUOTES_ENABLED = _env("QUOTES_ENABLED", "true").lower() == "true"
+    QUOTES_CACHE_SECONDS = 60
+
 
 class DevelopmentConfig(Config):
     DEBUG = True
@@ -51,6 +64,8 @@ class ProductionConfig(Config):
         missing = [name for name in ("JWT_SECRET_KEY", "SECRET_KEY", "DATABASE_URL") if not os.getenv(name)]
         if missing:
             raise RuntimeError(f"Missing required environment variables for production: {', '.join(missing)}")
+        if len(os.getenv("JWT_SECRET_KEY")) < 32:
+            raise RuntimeError("JWT_SECRET_KEY must be at least 32 characters in production")
 
 
 class TestingConfig(Config):
@@ -59,6 +74,8 @@ class TestingConfig(Config):
     JWT_SECRET_KEY = "test-jwt-secret-at-least-32-bytes-long"
     BCRYPT_ROUNDS = 4
     GEMINI_API_KEY = "test-key"
+    QUOTES_ENABLED = False
+    RATELIMIT_STORAGE_URI = "memory://"
 
 
 config_by_name = {

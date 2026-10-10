@@ -4,11 +4,15 @@ from flask import current_app
 from google import genai
 from google.genai import types
 
+from app.services.quotes import get_quotes
+
 SYSTEM_PROMPT = """You are a financial education assistant for retail investors.
 Explain investing concepts clearly, discuss diversification, risk, fees, and time horizon,
 and relate your answers to the user's portfolio when it is provided.
 You are not a licensed financial advisor: do not promise returns, and recommend that users
 consult a licensed professional before making significant financial decisions."""
+
+TRUNCATION_NOTE = "\n\n*(This answer was cut off because it hit the length limit.)*"
 
 
 class AdvisorUnavailableError(Exception):
@@ -31,12 +35,19 @@ def _get_client():
 def _portfolio_context(portfolio):
     if portfolio is None or not portfolio.holdings:
         return "The user has not entered any holdings."
-    lines = [f"- {h.symbol}: {h.quantity} shares at average cost {h.average_cost}" for h in portfolio.holdings]
+    quotes = get_quotes([h.symbol for h in portfolio.holdings])
+    lines = []
+    for h in portfolio.holdings:
+        line = f"- {h.symbol}: {h.quantity} shares at average cost {h.average_cost}"
+        quote = quotes.get(h.symbol)
+        if quote:
+            line += f", current price {quote['price']} {quote['currency']}"
+        lines.append(line)
     return "The user's current holdings:\n" + "\n".join(lines)
 
 
-def generate_reply(messages, portfolio=None):
-    """Return the model's reply to a conversation.
+def _request_args(messages, portfolio):
+    """Build the generate_content arguments.
 
     `messages` is the conversation so far (Message rows, oldest first), ending with the user's new message.
     """
@@ -49,16 +60,27 @@ def generate_reply(messages, portfolio=None):
         )
         for m in messages[-limit:]
     ]
+    return {
+        "model": current_app.config["GEMINI_MODEL"],
+        "contents": contents,
+        "config": types.GenerateContentConfig(
+            system_instruction=f"{SYSTEM_PROMPT}\n\n{_portfolio_context(portfolio)}",
+            max_output_tokens=current_app.config["GEMINI_MAX_OUTPUT_TOKENS"],
+        ),
+    }
 
+
+def _hit_token_limit(response):
+    truncated = bool(response.candidates) and response.candidates[0].finish_reason == types.FinishReason.MAX_TOKENS
+    if truncated:
+        current_app.logger.warning("Gemini reply hit GEMINI_MAX_OUTPUT_TOKENS and was cut off")
+    return truncated
+
+
+def generate_reply(messages, portfolio=None):
+    """Return the model's full reply to a conversation."""
     try:
-        response = _get_client().models.generate_content(
-            model=current_app.config["GEMINI_MODEL"],
-            contents=contents,
-            config=types.GenerateContentConfig(
-                system_instruction=f"{SYSTEM_PROMPT}\n\n{_portfolio_context(portfolio)}",
-                max_output_tokens=current_app.config["GEMINI_MAX_OUTPUT_TOKENS"],
-            ),
-        )
+        response = _get_client().models.generate_content(**_request_args(messages, portfolio))
     except AdvisorUnavailableError:
         raise
     except Exception as err:
@@ -67,7 +89,28 @@ def generate_reply(messages, portfolio=None):
 
     if not response.text:
         raise AdvisorUnavailableError("The advisor returned an empty response")
-    if response.candidates and response.candidates[0].finish_reason == types.FinishReason.MAX_TOKENS:
-        current_app.logger.warning("Gemini reply hit GEMINI_MAX_OUTPUT_TOKENS and was cut off")
-        return response.text + "\n\n*(This answer was cut off because it hit the length limit.)*"
-    return response.text
+    return response.text + (TRUNCATION_NOTE if _hit_token_limit(response) else "")
+
+
+def stream_reply(messages, portfolio=None):
+    """Yield the model's reply in text chunks as Gemini produces them.
+
+    Raises AdvisorUnavailableError (possibly after some chunks were yielded) if the request fails.
+    """
+    try:
+        args = _request_args(messages, portfolio)
+        produced_text = False
+        for chunk in _get_client().models.generate_content_stream(**args):
+            if chunk.text:
+                produced_text = True
+                yield chunk.text
+            if _hit_token_limit(chunk):
+                yield TRUNCATION_NOTE
+    except AdvisorUnavailableError:
+        raise
+    except Exception as err:
+        current_app.logger.exception("Gemini streaming request failed")
+        raise AdvisorUnavailableError("The advisor service is unavailable") from err
+
+    if not produced_text:
+        raise AdvisorUnavailableError("The advisor returned an empty response")

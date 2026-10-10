@@ -2,8 +2,8 @@ import bcrypt
 from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import create_access_token, jwt_required
 
-from app import db
-from app.middleware import current_user_id
+from app import db, limiter
+from app.middleware import auth_rate_limit, current_user_id
 from app.models import User
 from app.schemas import LoginSchema, RegisterSchema
 from app.services.audit import record_audit
@@ -12,6 +12,7 @@ auth_bp = Blueprint("auth", __name__)
 
 
 @auth_bp.post("/register")
+@limiter.limit(auth_rate_limit)
 def register():
     data = RegisterSchema().load(request.get_json(silent=True) or {})
     email = data["email"].lower()
@@ -32,6 +33,7 @@ def register():
 
 
 @auth_bp.post("/login")
+@limiter.limit(auth_rate_limit)
 def login():
     data = LoginSchema().load(request.get_json(silent=True) or {})
     user = User.query.filter_by(email=data["email"].lower()).first()

@@ -1,4 +1,4 @@
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 from flask_jwt_extended import jwt_required
 
 from app import db
@@ -6,6 +6,7 @@ from app.middleware import current_user_id
 from app.models import Holding, Portfolio
 from app.schemas import HoldingSchema
 from app.services.audit import record_audit
+from app.services.quotes import get_quotes
 
 portfolio_bp = Blueprint("portfolio", __name__)
 
@@ -32,6 +33,15 @@ def get_portfolio():
     portfolio = _get_or_create_portfolio(current_user_id())
     db.session.commit()
     return jsonify({"portfolio": portfolio.to_dict()})
+
+
+@portfolio_bp.get("/quotes")
+@jwt_required()
+def quotes():
+    """Current market prices for the user's holdings (a separate call so the portfolio itself loads fast)."""
+    portfolio = Portfolio.query.filter_by(user_id=current_user_id()).first()
+    symbols = [h.symbol for h in portfolio.holdings] if portfolio else []
+    return jsonify({"enabled": current_app.config["QUOTES_ENABLED"], "quotes": get_quotes(symbols)})
 
 
 @portfolio_bp.post("/holding")

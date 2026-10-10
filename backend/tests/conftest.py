@@ -47,3 +47,22 @@ def fake_advisor(monkeypatch):
 
     monkeypatch.setattr("app.routes.chat.generate_reply", _fake_generate_reply)
     return calls
+
+
+@pytest.fixture
+def fake_stream(monkeypatch):
+    """Replace the streaming Gemini call with canned chunks."""
+
+    def _fake_stream_reply(messages, portfolio=None):
+        yield "Diversification "
+        yield "spreads risk."
+
+    monkeypatch.setattr("app.routes.chat.stream_reply", _fake_stream_reply)
+
+
+def parse_sse(response):
+    """Decode a text/event-stream response body into a list of event dicts."""
+    import json
+
+    body = response.get_data(as_text=True)
+    return [json.loads(line[len("data: "):]) for line in body.splitlines() if line.startswith("data: ")]
