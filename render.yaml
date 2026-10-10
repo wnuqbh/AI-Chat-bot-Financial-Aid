@@ -4,6 +4,7 @@ services:
   - type: web
     name: advisor-api
     runtime: docker
+    region: singapore # same region as the Supabase database (ap-southeast-1)
     rootDir: backend
     dockerfilePath: ./Dockerfile
     plan: free
@@ -27,9 +28,11 @@ services:
         fromService:
           type: keyvalue
           name: advisor-ratelimit
+    region: singapore
           property: connectionString
 
   - type: keyvalue
     name: advisor-ratelimit
+    region: singapore
     plan: free
     ipAllowList: [] # only reachable from your Render services
