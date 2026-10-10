@@ -5,11 +5,14 @@ from flask_jwt_extended import jwt_required
 
 from app import db, limiter
 from app.middleware import chat_rate_limit, current_user_id, user_rate_limit_key
-from app.models import ChatSession, Conversation, Message
+from app.models import ChatSession, Conversation, Message, utcnow
 from app.schemas import CreateSessionSchema, MessageSchema
-from app.services.advisor import AdvisorUnavailableError, generate_reply, stream_reply
+from app.services.advisor import AdvisorUnavailableError, build_request, generate_reply, stream_reply
 
 chat_bp = Blueprint("chat", __name__)
+
+# One allowance per user across both message endpoints, so alternating between them doesn't double it.
+chat_limit = limiter.shared_limit(chat_rate_limit, scope="chat-messages", key_func=user_rate_limit_key)
 
 
 def _get_owned_conversation(conversation_id, user_id):
@@ -65,7 +68,7 @@ def list_sessions():
 
 @chat_bp.post("/message")
 @jwt_required()
-@limiter.limit(chat_rate_limit, key_func=user_rate_limit_key)
+@chat_limit
 def send_message():
     conversation, user_message = _start_exchange()
     try:
@@ -82,24 +85,36 @@ def _sse(event):
 
 @chat_bp.post("/message/stream")
 @jwt_required()
-@limiter.limit(chat_rate_limit, key_func=user_rate_limit_key)
+@chat_limit
 def stream_message():
     """Like /message, but streams the reply as Server-Sent Events.
 
     Events: {"type": "delta", "text"} for each chunk, then {"type": "done", "user_message", "assistant_message"}
     once both messages are saved, or {"type": "error", "error"} (nothing is saved in that case).
     """
-    conversation, user_message = _start_exchange()
-    history = list(conversation.messages)
-    portfolio = conversation.session.user.portfolio
+    data = MessageSchema().load(request.get_json(silent=True) or {})
+    conversation = _get_owned_conversation(data["conversation_id"], current_user_id())
+    conversation_id, content, sent_at = conversation.id, data["content"], utcnow()
+    # Everything the stream needs from the database is read now: the server closes this request's
+    # session once the view returns, before the generator below runs.
+    gemini_request = build_request(
+        [*conversation.messages, Message(role="user", content=content)], conversation.session.user.portfolio
+    )
 
     @stream_with_context
     def events():
         parts = []
         try:
-            for text in stream_reply(history, portfolio):
+            for text in stream_reply(gemini_request):
                 parts.append(text)
                 yield _sse({"type": "delta", "text": text})
+            # Save in a fresh session (the view's one is gone), re-checking the conversation still exists.
+            conversation = db.session.get(Conversation, conversation_id)
+            if conversation is None:
+                yield _sse({"type": "error", "error": "This conversation was deleted"})
+                return
+            user_message = Message(conversation=conversation, role="user", content=content, created_at=sent_at)
+            db.session.add(user_message)
             yield _sse({"type": "done", **_finish_exchange(conversation, user_message, "".join(parts))})
         except AdvisorUnavailableError as err:
             db.session.rollback()

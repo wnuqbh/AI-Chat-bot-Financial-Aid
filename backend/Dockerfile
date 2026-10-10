@@ -7,9 +7,10 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
-
-RUN useradd --create-home appuser
+RUN chmod +x docker-entrypoint.sh && useradd --create-home appuser
 USER appuser
 
 EXPOSE 5000
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--preload", "main:app"]
+HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=3 \
+  CMD python -c "import os, urllib.request; urllib.request.urlopen(f'http://127.0.0.1:{os.getenv(\"PORT\", \"5000\")}/api/health')"
+CMD ["./docker-entrypoint.sh"]

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import { Link } from 'react-router'
 import { ApiError, api, type Holding, type Quote } from '../api'
 import { summarizePortfolio, type HoldingSummary } from '../portfolio'
@@ -26,12 +26,20 @@ export default function PortfolioPage() {
       .catch((err) => setError(err instanceof ApiError ? err.message : 'Could not load portfolio'))
   }, [])
 
+  // Adding holdings quickly starts overlapping requests; only the newest may update state, or an
+  // older response (missing the latest symbols) could land last and overwrite it.
+  const latestQuoteRequest = useRef(0)
   const loadQuotes = useCallback(() => {
+    const requestId = ++latestQuoteRequest.current
     setQuoteState((prev) => ({ ...prev, status: 'loading' }))
     api
       .quotes()
-      .then(({ enabled, quotes }) => setQuoteState({ status: enabled ? 'ready' : 'disabled', quotes }))
-      .catch(() => setQuoteState((prev) => ({ ...prev, status: 'error' })))
+      .then(({ enabled, quotes }) => {
+        if (requestId === latestQuoteRequest.current) setQuoteState({ status: enabled ? 'ready' : 'disabled', quotes })
+      })
+      .catch(() => {
+        if (requestId === latestQuoteRequest.current) setQuoteState((prev) => ({ ...prev, status: 'error' }))
+      })
   }, [])
 
   // Refetch prices whenever the set of symbols changes (not on every quantity edit).

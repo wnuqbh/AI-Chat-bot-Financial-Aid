@@ -103,4 +103,38 @@ describe('portfolio', () => {
     expect(screen.getAllByText('+$500.00')).not.toHaveLength(0) // gain
     expect(screen.getByRole('link', { name: 'Admin' })).toBeInTheDocument()
   })
+
+  it('ignores a slow, outdated price response', async () => {
+    localStorage.setItem('advisor_token', 'token')
+    const vti = { id: 1, symbol: 'VTI', quantity: '1', average_cost: '1' }
+    const quote = (price: number) => ({ price, previous_close: price, currency: 'USD' })
+    let quoteCalls = 0
+    let releaseFirst!: () => void
+    fakeServer({
+      'GET /auth/me': () => json({ user }),
+      'GET /portfolio/': () => json({ portfolio: { id: 1, name: 'Mine', holdings: [vti] } }),
+      'POST /portfolio/holding': () => json({ holding: { id: 2, symbol: 'AAPL', quantity: '1', average_cost: '1' } }, 201),
+      'GET /portfolio/quotes': async () => {
+        quoteCalls += 1
+        if (quoteCalls === 1) {
+          // The first request (VTI only) is slow and finishes after the second.
+          await new Promise<void>((resolve) => (releaseFirst = resolve))
+          return json({ enabled: true, quotes: { VTI: quote(10) } })
+        }
+        return json({ enabled: true, quotes: { VTI: quote(10), AAPL: quote(123.45) } })
+      },
+    })
+    renderAt('/portfolio')
+
+    await screen.findByRole('cell', { name: 'VTI' })
+    await userEvent.type(screen.getByLabelText('Symbol'), 'AAPL')
+    await userEvent.type(screen.getByLabelText('Shares'), '1')
+    await userEvent.type(screen.getByLabelText('Average cost per share'), '1')
+    await userEvent.click(screen.getByRole('button', { name: 'Add' }))
+    expect(await screen.findAllByText('$123.45')).not.toHaveLength(0)
+
+    releaseFirst()
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    expect(screen.getAllByText('$123.45')).not.toHaveLength(0)
+  })
 })

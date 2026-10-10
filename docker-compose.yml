@@ -1,0 +1,45 @@
+# The whole app: nginx + React frontend, Flask API, Postgres and Redis.
+#   docker compose up --build      then open http://localhost:8080
+# The backend reads GEMINI_API_KEY, JWT_SECRET_KEY and SECRET_KEY from backend/.env.
+services:
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  backend:
+    build: ./backend
+    env_file: ./backend/.env
+    environment:
+      FLASK_ENV: production
+      DATABASE_URL: postgresql://advisor:advisor@db:5432/advisor
+      RATELIMIT_STORAGE_URI: redis://redis:6379
+      TRUSTED_PROXY_COUNT: "1"
+      CORS_ORIGINS: http://localhost:8080
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: advisor
+      POSTGRES_PASSWORD: advisor
+      POSTGRES_DB: advisor
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U advisor"]
+      interval: 2s
+      retries: 15
+
+  redis:
+    image: redis:7-alpine
+
+volumes:
+  pgdata:

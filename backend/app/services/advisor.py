@@ -46,10 +46,11 @@ def _portfolio_context(portfolio):
     return "The user's current holdings:\n" + "\n".join(lines)
 
 
-def _request_args(messages, portfolio):
-    """Build the generate_content arguments.
+def build_request(messages, portfolio):
+    """Build the generate_content arguments from plain data (no ORM objects are kept).
 
-    `messages` is the conversation so far (Message rows, oldest first), ending with the user's new message.
+    `messages` is the conversation so far (objects with .role and .content, oldest first), ending with the
+    user's new message. Call this while the request's database session is still open.
     """
     limit = current_app.config["CHAT_HISTORY_LIMIT"]
     contents = [
@@ -80,7 +81,7 @@ def _hit_token_limit(response):
 def generate_reply(messages, portfolio=None):
     """Return the model's full reply to a conversation."""
     try:
-        response = _get_client().models.generate_content(**_request_args(messages, portfolio))
+        response = _get_client().models.generate_content(**build_request(messages, portfolio))
     except AdvisorUnavailableError:
         raise
     except Exception as err:
@@ -92,15 +93,15 @@ def generate_reply(messages, portfolio=None):
     return response.text + (TRUNCATION_NOTE if _hit_token_limit(response) else "")
 
 
-def stream_reply(messages, portfolio=None):
+def stream_reply(request):
     """Yield the model's reply in text chunks as Gemini produces them.
 
-    Raises AdvisorUnavailableError (possibly after some chunks were yielded) if the request fails.
+    `request` comes from build_request(). Raises AdvisorUnavailableError (possibly after some chunks were
+    yielded) if the request fails.
     """
+    produced_text = False
     try:
-        args = _request_args(messages, portfolio)
-        produced_text = False
-        for chunk in _get_client().models.generate_content_stream(**args):
+        for chunk in _get_client().models.generate_content_stream(**request):
             if chunk.text:
                 produced_text = True
                 yield chunk.text

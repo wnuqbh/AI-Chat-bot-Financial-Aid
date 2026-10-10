@@ -1,6 +1,7 @@
 venv/
 instance/
 tests/
+scripts/
 __pycache__/
 .pytest_cache/
 .env

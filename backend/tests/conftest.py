@@ -49,15 +49,27 @@ def fake_advisor(monkeypatch):
     return calls
 
 
+def close_request_session():
+    """Mimic a real server, which closes the request's DB session before a streamed body is generated.
+
+    The test client keeps it open, which would hide bugs where the stream relies on objects from the view.
+    """
+    db.session.remove()
+
+
 @pytest.fixture
 def fake_stream(monkeypatch):
-    """Replace the streaming Gemini call with canned chunks."""
+    """Replace the streaming Gemini call with canned chunks; returns the requests it was given."""
+    requests = []
 
-    def _fake_stream_reply(messages, portfolio=None):
+    def _fake_stream_reply(gemini_request):
+        close_request_session()
+        requests.append(gemini_request)
         yield "Diversification "
         yield "spreads risk."
 
     monkeypatch.setattr("app.routes.chat.stream_reply", _fake_stream_reply)
+    return requests
 
 
 def parse_sse(response):

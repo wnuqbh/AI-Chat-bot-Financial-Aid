@@ -26,3 +26,15 @@ def test_login_is_rate_limited_per_ip(app, client):
         client.post("/api/auth/login", json={"email": "x@example.com", "password": "whatever"})
     response = client.post("/api/auth/login", json={"email": "x@example.com", "password": "whatever"})
     assert response.status_code == 429
+
+
+def test_chat_limit_is_shared_between_streaming_and_plain_endpoints(app, client, register, fake_advisor, fake_stream):
+    app.config["CHAT_RATE_LIMIT"] = "2 per minute"
+    _, headers = register()
+    conversation_id = client.post("/api/chat/session", json={}, headers=headers).get_json()["conversation_id"]
+    body = {"conversation_id": conversation_id, "content": "hi"}
+
+    assert client.post("/api/chat/message", json=body, headers=headers).status_code == 201
+    assert client.post("/api/chat/message/stream", json=body, headers=headers).status_code == 200
+    assert client.post("/api/chat/message", json=body, headers=headers).status_code == 429
+    assert client.post("/api/chat/message/stream", json=body, headers=headers).status_code == 429
