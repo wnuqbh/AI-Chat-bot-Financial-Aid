@@ -23,6 +23,11 @@ export default function Layout() {
           <NavLink to="/portfolio" className={navLinkClass}>
             Portfolio
           </NavLink>
+          {user?.is_admin && (
+            <NavLink to="/admin" className={navLinkClass}>
+              Admin
+            </NavLink>
+          )}
         </nav>
         <div className="ml-auto flex items-center gap-3">
           <span className="hidden truncate text-sm text-slate-500 md:inline">{user?.full_name || user?.email}</span>

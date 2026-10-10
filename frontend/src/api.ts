@@ -30,6 +30,32 @@ export interface Holding {
   average_cost: string
 }
 
+export interface Quote {
+  price: number
+  previous_close: number | null
+  currency: string
+}
+
+export interface AdminUser extends User {
+  account_locked: boolean
+  created_at: string
+}
+
+export interface AuditLog {
+  id: number
+  user_id: number | null
+  action: string
+  details: string | null
+  ip_address: string | null
+  created_at: string
+}
+
+export interface Page<T> {
+  items: T[]
+  total: number
+  page: number
+}
+
 export class ApiError extends Error {
   status: number
   details?: Record<string, string[]>
@@ -62,7 +88,8 @@ export function setUnauthorizedHandler(handler: () => void) {
   onUnauthorized = handler
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+/** Make a request and throw ApiError for network failures and non-2xx responses. */
+async function send(method: string, path: string, body?: unknown): Promise<Response> {
   const token = getToken()
   let response: Response
   try {
@@ -77,14 +104,62 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   } catch {
     throw new ApiError(0, 'Cannot reach the server. Is the backend running?')
   }
-
-  if (response.status === 204) return undefined as T
-  const data = await response.json().catch(() => ({}))
   if (!response.ok) {
+    const data = await response.json().catch(() => ({}))
     if (response.status === 401 && token) onUnauthorized()
     throw new ApiError(response.status, data.error ?? `Request failed (${response.status})`, data.details)
   }
-  return data as T
+  return response
+}
+
+async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const response = await send(method, path, body)
+  if (response.status === 204) return undefined as T
+  return (await response.json()) as T
+}
+
+export type StreamEvent =
+  | { type: 'delta'; text: string }
+  | { type: 'done'; user_message: Message; assistant_message: Message }
+  | { type: 'error'; error: string }
+
+/**
+ * Split buffered Server-Sent Events text into complete events and the unfinished remainder.
+ * Events are separated by a blank line; each carries one `data: <json>` line.
+ */
+export function parseSSE(buffer: string): { events: StreamEvent[]; rest: string } {
+  const blocks = buffer.replace(/\r\n/g, '\n').split('\n\n')
+  const rest = blocks.pop() ?? ''
+  const events = blocks
+    .map((block) => block.split('\n').find((line) => line.startsWith('data: ')))
+    .filter((line): line is string => line !== undefined)
+    .map((line) => JSON.parse(line.slice('data: '.length)) as StreamEvent)
+  return { events, rest }
+}
+
+/** Send a chat message and receive the reply incrementally; resolves once both messages are saved. */
+async function streamMessage(
+  conversationId: number,
+  content: string,
+  onDelta: (text: string) => void,
+): Promise<{ user_message: Message; assistant_message: Message }> {
+  const response = await send('POST', '/chat/message/stream', { conversation_id: conversationId, content })
+  if (!response.body) throw new ApiError(0, 'Streaming is not supported by this browser')
+
+  const reader = response.body.pipeThrough(new TextDecoderStream()).getReader()
+  let buffer = ''
+  for (;;) {
+    const { value, done } = await reader.read()
+    if (done) break
+    const parsed = parseSSE(buffer + value)
+    buffer = parsed.rest
+    for (const event of parsed.events) {
+      if (event.type === 'delta') onDelta(event.text)
+      else if (event.type === 'done') return event
+      else throw new ApiError(503, event.error)
+    }
+  }
+  throw new ApiError(0, 'The connection closed before the reply finished')
 }
 
 interface AuthResponse {
@@ -103,11 +178,7 @@ export const api = {
   deleteSession: (sessionId: number) => request<void>('DELETE', `/chat/session/${sessionId}`),
   history: (conversationId: number) =>
     request<{ conversation_id: number; messages: Message[] }>('GET', `/chat/history/${conversationId}`),
-  sendMessage: (conversationId: number, content: string) =>
-    request<{ user_message: Message; assistant_message: Message }>('POST', '/chat/message', {
-      conversation_id: conversationId,
-      content,
-    }),
+  streamMessage,
 
   portfolio: () => request<{ portfolio: { id: number; name: string; holdings: Holding[] } }>('GET', '/portfolio/'),
   addHolding: (symbol: string, quantity: string, average_cost: string) =>
@@ -115,4 +186,19 @@ export const api = {
   updateHolding: (id: number, quantity: string, average_cost: string) =>
     request<{ holding: Holding }>('PUT', `/portfolio/holding/${id}`, { quantity, average_cost }),
   deleteHolding: (id: number) => request<void>('DELETE', `/portfolio/holding/${id}`),
+  quotes: () => request<{ enabled: boolean; quotes: Record<string, Quote | null> }>('GET', '/portfolio/quotes'),
+
+  adminUsers: async (page = 1): Promise<Page<AdminUser>> => {
+    const data = await request<{ users: AdminUser[]; total: number; page: number }>('GET', `/admin/users?page=${page}`)
+    return { items: data.users, total: data.total, page: data.page }
+  },
+  unlockUser: (id: number) => request<{ user: AdminUser }>('POST', `/admin/users/${id}/unlock`),
+  auditLogs: async (page = 1, action = ''): Promise<Page<AuditLog>> => {
+    const query = new URLSearchParams({ page: String(page), ...(action && { action }) })
+    const data = await request<{ audit_logs: AuditLog[]; total: number; page: number }>(
+      'GET',
+      `/admin/audit-logs?${query}`,
+    )
+    return { items: data.audit_logs, total: data.total, page: data.page }
+  },
 }

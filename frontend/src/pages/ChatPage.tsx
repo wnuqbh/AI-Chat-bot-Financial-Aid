@@ -19,6 +19,8 @@ export default function ChatPage() {
   const [messages, setMessages] = useState<Message[]>([])
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
+  // The advisor's reply as it streams in; replaced by the saved message once it completes.
+  const [streamingText, setStreamingText] = useState('')
   const [loadingHistory, setLoadingHistory] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [sidebarOpen, setSidebarOpen] = useState(false)
@@ -70,7 +72,7 @@ export default function ChatPage() {
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
-  }, [messages, sending])
+  }, [messages, sending, streamingText])
 
   async function send(text: string) {
     const content = text.trim()
@@ -88,9 +90,15 @@ export default function ChatPage() {
         // Only create a session once there's a first message, so empty chats don't pile up.
         id = (await api.createSession()).conversation_id
         justCreatedId.current = id
+        // Mark it active now: the router applies navigation as a transition, and a fast reply could
+        // otherwise arrive before the effect below updates the ref, and be dropped as "stale".
+        activeIdRef.current = id
         navigate(`/chat/${id}`, { replace: true })
       }
-      const { user_message, assistant_message } = await api.sendMessage(id, content)
+      const conversation = id
+      const { user_message, assistant_message } = await api.streamMessage(id, content, (text) => {
+        if (activeIdRef.current === conversation) setStreamingText((prev) => prev + text)
+      })
       refreshSessions()
       if (activeIdRef.current !== id) return
       setMessages((prev) => [...prev.filter((m) => m.id !== pending.id), user_message, assistant_message])
@@ -100,6 +108,7 @@ export default function ChatPage() {
       setError(err instanceof ApiError ? err.friendlyMessage : 'Something went wrong')
     } finally {
       setSending(false)
+      setStreamingText('')
       inputRef.current?.focus()
     }
   }
@@ -193,7 +202,10 @@ export default function ChatPage() {
                 {messages.map((message) => (
                   <MessageBubble key={message.id} message={message} />
                 ))}
-                {sending && (
+                {streamingText && (
+                  <MessageBubble message={{ id: 0, role: 'assistant', content: streamingText, created_at: '' }} />
+                )}
+                {sending && !streamingText && (
                   <div className="flex items-center gap-2 text-sm text-slate-400">
                     <span className="flex gap-1">
                       <span className="h-2 w-2 animate-bounce rounded-full bg-slate-300 [animation-delay:-0.3s]" />

@@ -1,6 +1,7 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router'
 import { AuthProvider, useAuth } from './auth'
 import Layout from './components/Layout'
+import AdminPage from './pages/AdminPage'
 import AuthPage from './pages/AuthPage'
 import ChatPage from './pages/ChatPage'
 import PortfolioPage from './pages/PortfolioPage'
@@ -28,6 +29,7 @@ function AppRoutes() {
         {/* One optional-param route, so starting a new chat doesn't remount the page */}
         <Route path="/chat/:conversationId?" element={<ChatPage />} />
         <Route path="/portfolio" element={<PortfolioPage />} />
+        {user.is_admin && <Route path="/admin" element={<AdminPage />} />}
       </Route>
       <Route path="*" element={<Navigate to="/chat" replace />} />
     </Routes>
