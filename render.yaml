@@ -1,0 +1,35 @@
+# Render Blueprint for the backend API (+ Redis for shared rate limits).
+# Render dashboard → New → Blueprint → pick this repo. See docs/DEPLOYMENT.md.
+services:
+  - type: web
+    name: advisor-api
+    runtime: docker
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    plan: free
+    healthCheckPath: /api/health
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: TRUSTED_PROXY_COUNT
+        value: "1"
+      - key: DATABASE_URL # Supabase "Session pooler" connection string
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: CORS_ORIGINS # your Vercel URL, e.g. https://advisor.vercel.app
+        sync: false
+      - key: JWT_SECRET_KEY
+        generateValue: true
+      - key: SECRET_KEY
+        generateValue: true
+      - key: RATELIMIT_STORAGE_URI
+        fromService:
+          type: keyvalue
+          name: advisor-ratelimit
+          property: connectionString
+
+  - type: keyvalue
+    name: advisor-ratelimit
+    plan: free
+    ipAllowList: [] # only reachable from your Render services
