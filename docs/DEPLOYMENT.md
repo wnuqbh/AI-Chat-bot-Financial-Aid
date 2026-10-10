@@ -62,13 +62,15 @@ Then open the Vercel URL, sign up, add a holding and ask a question.
 
 ## 5. Make yourself an admin
 
-Render → `advisor-api` → **Shell**:
+Sign up on the live site first. Render's free plan has no Shell, so run the command from your own machine against the production database (from `backend/`, venv active). In PowerShell:
 
-```bash
+```powershell
+$env:DATABASE_URL = "<your Supabase connection string>"
 flask --app main make-admin you@example.com
+Remove-Item Env:DATABASE_URL
 ```
 
-Log out and in again to see the **Admin** tab.
+On a paid Render plan you can instead run `flask --app main make-admin you@example.com` in **advisor-api → Shell**. Log out and back in to see the **Admin** tab.
 
 ## Operating notes
 

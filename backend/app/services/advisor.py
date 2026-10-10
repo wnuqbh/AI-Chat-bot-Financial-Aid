@@ -1,8 +1,10 @@
 """Generates advisor replies with the Google Gemini API."""
 
+import time
+
 from flask import current_app
 from google import genai
-from google.genai import types
+from google.genai import errors, types
 
 from app.services.quotes import get_quotes
 
@@ -17,6 +19,31 @@ TRUNCATION_NOTE = "\n\n*(This answer was cut off because it hit the length limit
 
 class AdvisorUnavailableError(Exception):
     pass
+
+
+# Gemini errors worth retrying: rate limits (429, common on free keys) and "model overloaded" or other 5xx errors.
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503, 504}
+
+
+def _status_code(err):
+    return err.code if isinstance(err, errors.APIError) else None
+
+
+def _user_message(err):
+    code = _status_code(err)
+    if code == 429:
+        return "The advisor is getting too many requests right now. Please wait a minute and try again."
+    if code in RETRYABLE_STATUS_CODES:
+        return "The advisor is temporarily overloaded. Please try again in a moment."
+    return "The advisor service is unavailable"
+
+
+def _should_retry(err, delays):
+    if delays and _status_code(err) in RETRYABLE_STATUS_CODES:
+        current_app.logger.warning("Gemini returned %s; retrying in %ss", _status_code(err), delays[0])
+        time.sleep(delays.pop(0))
+        return True
+    return False
 
 
 _client = None
@@ -80,13 +107,19 @@ def _hit_token_limit(response):
 
 def generate_reply(messages, portfolio=None):
     """Return the model's full reply to a conversation."""
-    try:
-        response = _get_client().models.generate_content(**build_request(messages, portfolio))
-    except AdvisorUnavailableError:
-        raise
-    except Exception as err:
-        current_app.logger.exception("Gemini request failed")
-        raise AdvisorUnavailableError("The advisor service is unavailable") from err
+    request = build_request(messages, portfolio)
+    delays = list(current_app.config["GEMINI_RETRY_DELAYS"])
+    while True:
+        try:
+            response = _get_client().models.generate_content(**request)
+            break
+        except AdvisorUnavailableError:
+            raise
+        except Exception as err:
+            if _should_retry(err, delays):
+                continue
+            current_app.logger.exception("Gemini request failed")
+            raise AdvisorUnavailableError(_user_message(err)) from err
 
     if not response.text:
         raise AdvisorUnavailableError("The advisor returned an empty response")
@@ -96,22 +129,28 @@ def generate_reply(messages, portfolio=None):
 def stream_reply(request):
     """Yield the model's reply in text chunks as Gemini produces them.
 
-    `request` comes from build_request(). Raises AdvisorUnavailableError (possibly after some chunks were
-    yielded) if the request fails.
+    `request` comes from build_request(). Temporary Gemini errors are retried, but only before any text was
+    yielded, since a retry can't take back what the user has already seen. Raises AdvisorUnavailableError
+    (possibly after some chunks were yielded) if the request fails.
     """
-    produced_text = False
-    try:
-        for chunk in _get_client().models.generate_content_stream(**request):
-            if chunk.text:
-                produced_text = True
-                yield chunk.text
-            if _hit_token_limit(chunk):
-                yield TRUNCATION_NOTE
-    except AdvisorUnavailableError:
-        raise
-    except Exception as err:
-        current_app.logger.exception("Gemini streaming request failed")
-        raise AdvisorUnavailableError("The advisor service is unavailable") from err
+    delays = list(current_app.config["GEMINI_RETRY_DELAYS"])
+    while True:
+        produced_text = False
+        try:
+            for chunk in _get_client().models.generate_content_stream(**request):
+                if chunk.text:
+                    produced_text = True
+                    yield chunk.text
+                if _hit_token_limit(chunk):
+                    yield TRUNCATION_NOTE
+            break
+        except AdvisorUnavailableError:
+            raise
+        except Exception as err:
+            if not produced_text and _should_retry(err, delays):
+                continue
+            current_app.logger.exception("Gemini streaming request failed")
+            raise AdvisorUnavailableError(_user_message(err)) from err
 
     if not produced_text:
         raise AdvisorUnavailableError("The advisor returned an empty response")

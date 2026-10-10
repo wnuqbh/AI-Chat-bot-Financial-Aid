@@ -38,6 +38,8 @@ class Config:
     GEMINI_MAX_OUTPUT_TOKENS = int(_env("GEMINI_MAX_OUTPUT_TOKENS", "8192"))
     # Older messages are dropped so long conversations stay within the model's context.
     CHAT_HISTORY_LIMIT = 20
+    # Seconds to wait before each retry of a temporary Gemini error (rate limit / overloaded).
+    GEMINI_RETRY_DELAYS = (1, 3)
 
     # Rate limits (Flask-Limiter syntax). Chat is limited per user, auth endpoints per IP address.
     CHAT_RATE_LIMIT = _env("CHAT_RATE_LIMIT", "10 per minute;200 per day")
@@ -75,6 +77,7 @@ class TestingConfig(Config):
     BCRYPT_ROUNDS = 4
     GEMINI_API_KEY = "test-key"
     QUOTES_ENABLED = False
+    GEMINI_RETRY_DELAYS = (0, 0)
     RATELIMIT_STORAGE_URI = "memory://"
 
 
