@@ -40,6 +40,10 @@ npm run dev                       # http://localhost:5173
 
 Tests: `pytest` in `backend/`, and `npm test` in `frontend/`.
 
+## Documentation
+
+Full documentation, with screenshots, is in [docs/](docs/README.md): setup, architecture, backend, frontend, API reference, security, testing, deployment, troubleshooting and a user guide.
+
 ## Deploy
 
 See [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md): Supabase (database) + Render (API) + Vercel (frontend), or a single Docker host.
