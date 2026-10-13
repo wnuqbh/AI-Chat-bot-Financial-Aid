@@ -24,7 +24,7 @@ jobs:
       - uses: actions/checkout@v4    # download your repo's code
       - run: echo "Stage 2 - TEST"
       - run: ls                      # list the files it downloaded
-      - run: exit 1                  # ADD THIS: "thisstep failed"
+      
 
   deploy:
     needs: test                      # wait for 'test' to pass first
