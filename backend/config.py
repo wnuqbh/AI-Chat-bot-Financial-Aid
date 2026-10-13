@@ -30,7 +30,7 @@ class Config:
     CORS_ORIGINS = _env("CORS_ORIGINS", "http://localhost:5173").split(",")
 
     BCRYPT_ROUNDS = 12
-    MAX_FAILED_LOGINS = 50
+    MAX_FAILED_LOGINS = 5
 
     GEMINI_API_KEY = _env("GEMINI_API_KEY")
     GEMINI_MODEL = _env("GEMINI_MODEL", "gemini-2.5-flash")
