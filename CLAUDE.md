@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Full-stack conversational app where retail investors get financial guidance from an LLM (Google Gemini), with answers informed by their holdings and live market prices.
 
-**Status (Oct 2026):** Feature-complete and running locally and in Docker Compose. Deployment config for Supabase + Render + Vercel is in place (`docs/DEPLOYMENT.md`) but not yet deployed. Git branch is `main`; CI is in `.github/workflows/ci.yml`.
+**Status (Oct 2026):** Feature-complete and running locally and in Docker Compose. Deployment config for Supabase + Render + Vercel is in place (`docs/DEPLOYMENT.md`) but not yet deployed. Git branch is `main`; CI (`.github/workflows/ci.yml`) runs backend `pytest`, frontend `lint` + `test` + `build`, and builds both Docker images.
 
 ## Commands
 
@@ -57,7 +57,7 @@ The Vite dev proxy targets `http://127.0.0.1:5000`; override with `API_PROXY_TAR
 - **Schema**: Alembic via Flask-Migrate (`migrations/`). `tests/test_migrations.py` fails if models and migrations drift. `migrations/env.py` was edited to pass `disable_existing_loggers=False`, because `main.py` runs migrations in-process and the default would silence the app's loggers.
 - **Data model** (`app/models/__init__.py`): User → ChatSession → Conversation → Message, and User → Portfolio (one per user, created lazily) → Holding (unique per symbol). Parent→child relationships use `cascade="all, delete-orphan"`. `AuditLog` deliberately has no relationship to User, so logs survive account deletion. The session model is `ChatSession` (table `sessions`) to avoid confusion with `db.session`.
 - **Chat**: `POST /api/chat/session` creates a session plus its first conversation. Two ways to send a message: `POST /api/chat/message` returns the full reply (used by the PowerShell scripts), and `POST /api/chat/message/stream` streams Server-Sent Events (`delta`, then `done` or `error`), which the frontend uses. Both commit the user and assistant messages together, or nothing if Gemini fails. **Streaming gotcha:** a real server closes the request's DB session before the response generator runs, so `stream_message` builds the whole Gemini request in the view (`advisor.build_request`, which reads history and portfolio) and saves in a fresh session at the end. The test fakes call `close_request_session()` to reproduce this, because the Flask test client keeps the session open.
-- **Advisor** (`app/services/advisor.py`): the system prompt includes holdings and live prices. History is capped at `CHAT_HISTORY_LIMIT`. Stored role `"assistant"` maps to Gemini's `"model"`. `gemini-2.5-*` counts thinking tokens against `GEMINI_MAX_OUTPUT_TOKENS`, so a low limit truncates answers; truncated replies get a visible note appended.
+- **Advisor** (`app/services/advisor.py`): the system prompt includes holdings and live prices. History is capped at `CHAT_HISTORY_LIMIT`. Stored role `"assistant"` maps to Gemini's `"model"`. `gemini-2.5-*` counts thinking tokens against `GEMINI_MAX_OUTPUT_TOKENS`, so a low limit truncates answers; truncated replies get a visible note appended. Gemini 429 and 5xx errors are retried with backoff (`GEMINI_RETRY_DELAYS`, zero in tests); streams retry only if no text has been sent yet. Failures raise `AdvisorUnavailableError` with a message the user can read.
 - **Quotes** (`app/services/quotes.py`): yfinance (Yahoo's unofficial API) with a 60s in-process cache. Unknown symbols and network failures return `None` rather than raising. `QUOTES_ENABLED=false` turns it off (off in tests).
 - **Rate limiting**: Flask-Limiter. Login and register are limited per IP (`AUTH_RATE_LIMIT`). Both message endpoints share one per-user allowance (`chat_limit` in `routes/chat.py`, `CHAT_RATE_LIMIT`). Storage is `RATELIMIT_STORAGE_URI`: `memory://` in development, Redis in compose and Render, which is needed once there are several gunicorn workers.
 - **Auth**: JWT subject is `str(user.id)`; use `app.middleware.current_user_id()`. Admin routes use `@admin_required`. Logins lock the account after `MAX_FAILED_LOGINS` failures; admins unlock it.
@@ -66,6 +66,7 @@ The Vite dev proxy targets `http://127.0.0.1:5000`; override with `API_PROXY_TAR
 ## Conventions
 
 - Every query for a user-owned resource must filter by the JWT user, joining through parents where needed (see `_get_owned_conversation`, `_get_owned_holding`). Return 404, not 403, for other users' resources.
+- Request bodies are validated with marshmallow schemas in `app/schemas/` (`XSchema().load(request.get_json(silent=True) or {})`).
 - Errors are JSON `{"error": "..."}` (429s too). Raise with `abort(code, description=...)` or return the JSON directly.
 - Timestamps use the `utcnow()` helper in models (timezone-aware).
 - Backend tests never call Gemini or Yahoo: use the `fake_advisor` / `fake_stream` fixtures. Tests use in-memory SQLite and `BCRYPT_ROUNDS=4`.
