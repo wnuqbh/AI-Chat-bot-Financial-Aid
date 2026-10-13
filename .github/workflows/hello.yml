@@ -1,0 +1,32 @@
+name: Hello Pipeline
+
+# WHEN does it run?
+on:
+  push:
+    branches: [practice/hello-ci]   # only when you push THIS branch
+  workflow_dispatch:                # also adds a "Run workflow" button on GitHub
+
+# WHAT does it do? Three jobs = three stages.
+jobs:
+  build:
+    runs-on: ubuntu-latest           # rent a fresh Linux computer
+    steps:
+      - run: echo "Stage 1 - BUILD"
+      - run: |
+          echo "I am running on: $(uname -a)"
+          echo "My username is: $(whoami)"
+          python3 --version
+
+  test:
+    needs: build                     # wait for 'build' to pass first
+    runs-on: ubuntu-latest           # a NEW fresh computer
+    steps:
+      - uses: actions/checkout@v4    # download your repo's code
+      - run: echo "Stage 2 - TEST"
+      - run: ls                      # list the files it downloaded
+
+  deploy:
+    needs: test                      # wait for 'test' to pass first
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "Stage 3 - DEPLOY (pretend)"
